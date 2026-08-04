@@ -34,7 +34,7 @@ function downloadFile(url, destPath) {
 }
 
 async function main() {
-  const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+  const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
   await downloadFile(`${baseURL}/ffmpeg-core.js`, path.join(destDir, 'ffmpeg-core.js'));
   await downloadFile(`${baseURL}/ffmpeg-core.wasm`, path.join(destDir, 'ffmpeg-core.wasm'));
   console.log('Archivos de FFmpeg WASM descargados exitosamente en public/ffmpeg/');

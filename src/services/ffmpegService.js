@@ -1,14 +1,15 @@
-import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { fetchFile, toBlobURL } from '@ffmpeg/util';
+import { FFmpeg } from "@ffmpeg/ffmpeg";
+import { fetchFile, toBlobURL } from "@ffmpeg/util";
 
 let ffmpegInstance = null;
 let loadPromise = null;
 
 export const formatBytes = (bytes) => {
-  if (!bytes || bytes <= 0) return '0 B';
-  if (bytes > 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
-  if (bytes > 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  return (bytes / 1024).toFixed(0) + ' KB';
+  if (!bytes || bytes <= 0) return "0 B";
+  if (bytes > 1024 * 1024 * 1024)
+    return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+  if (bytes > 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  return (bytes / 1024).toFixed(0) + " KB";
 };
 
 /**
@@ -33,43 +34,70 @@ export async function getFFmpeg(onStatusUpdate, onLog, onProgress) {
   }
 
   loadPromise = (async () => {
-    onStatusUpdate?.({ status: 'loading', text: 'Iniciando descarga del motor...', pct: 5 });
-
-    const ffmpeg = new FFmpeg();
-
-    ffmpeg.on('log', ({ message }) => {
-      onLog?.(message);
+    onStatusUpdate?.({
+      status: "loading",
+      text: "Iniciando descarga del motor...",
+      pct: 5,
     });
 
-    ffmpeg.on('progress', ({ progress }) => {
-      onProgress?.(Math.min(100, Math.max(0, Math.round(progress * 100))));
-    });
-
-    // Use the ESM build from unpkg CDN — this is what the worker can `import()`.
-    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
+    const createInstance = () => {
+      return new FFmpeg();
+    };
 
     try {
-      onStatusUpdate?.({ status: 'loading', text: 'Descargando ffmpeg-core.js...', pct: 15 });
-      const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript');
+      let ffmpeg = createInstance();
 
-      onStatusUpdate?.({ status: 'loading', text: 'Descargando ffmpeg-core.wasm (~32 MB)...', pct: 40 });
-      const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm');
+      const loadLogHandler = ({ message }) => onLog?.(message);
+      const loadProgressHandler = ({ progress }) => {
+        onProgress?.(Math.min(100, Math.max(0, Math.round(progress * 100))));
+      };
 
-      onStatusUpdate?.({ status: 'loading', text: 'Inicializando motor WebAssembly...', pct: 85 });
+      ffmpeg.on("log", loadLogHandler);
+      ffmpeg.on("progress", loadProgressHandler);
 
-      await ffmpeg.load({
-        coreURL,
-        wasmURL,
-      });
+      try {
+        // Intento 1: Carga local (rápido, offline)
+        onStatusUpdate?.({
+          status: "loading",
+          text: "Cargando motor local...",
+          pct: 15,
+        });
+        const coreURL = await toBlobURL(`/ffmpeg/ffmpeg-core.js`, "text/javascript");
+        const wasmURL = await toBlobURL(`/ffmpeg/ffmpeg-core.wasm`, "application/wasm");
+
+        await ffmpeg.load({ coreURL, wasmURL });
+      } catch (localErr) {
+        console.warn("Carga local falló, reintentando vía CDN:", localErr);
+        ffmpeg.off("log", loadLogHandler);
+        ffmpeg.off("progress", loadProgressHandler);
+        
+        ffmpeg = createInstance(); // Recrear instancia para evitar worker corrupto
+        ffmpeg.on("log", loadLogHandler);
+        ffmpeg.on("progress", loadProgressHandler);
+
+        const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm";
+        onStatusUpdate?.({
+          status: "loading",
+          text: "Descargando motor desde CDN...",
+          pct: 30,
+        });
+        const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript");
+        const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm");
+
+        await ffmpeg.load({ coreURL, wasmURL });
+      }
+
+      ffmpeg.off("log", loadLogHandler);
+      ffmpeg.off("progress", loadProgressHandler);
 
       ffmpegInstance = ffmpeg;
-      onStatusUpdate?.({ status: 'ready', text: 'Motor listo', pct: 100 });
+      onStatusUpdate?.({ status: "ready", text: "Motor listo", pct: 100 });
       return ffmpeg;
     } catch (err) {
-      console.error('Error al cargar FFmpeg WASM:', err);
+      console.error("Error al cargar FFmpeg WASM:", err);
       onStatusUpdate?.({
-        status: 'error',
-        text: 'Error al cargar · clic para reintentar',
+        status: "error",
+        text: "Error al cargar · clic para reintentar",
         pct: 0,
         error: err.message,
       });
@@ -91,145 +119,174 @@ export async function getFFmpeg(onStatusUpdate, onLog, onProgress) {
  *   - cropRect: { x, y, w, h } in percentages of video (100 = full)
  *   - watermark: { file, x, y, scale, opacity } — file is a File/Blob, x/y/scale in %, opacity 0-1
  */
-export async function compressVideo({ file, settings, extras, onLog, onProgress, onStatus }) {
-  onStatus?.('Preparando motor...');
-  const ffmpeg = await getFFmpeg();
+export async function compressVideo({
+  file,
+  settings,
+  extras,
+  onLog,
+  onProgress,
+  onStatus,
+}) {
+  onStatus?.("Preparando motor...");
+  const ffmpeg = await getFFmpeg(
+    (statusObj) => onStatus?.(statusObj?.text || statusObj),
+    onLog,
+    onProgress
+  );
 
-  // Determine file extension
+  const logHandler = ({ message }) => onLog?.(message);
+  const progressHandler = ({ progress }) => {
+    onProgress?.(Math.min(100, Math.max(0, Math.round(progress * 100))));
+  };
+
+  if (onLog) ffmpeg.on("log", logHandler);
+  if (onProgress) ffmpeg.on("progress", progressHandler);
+
   const extMatch = file.name.match(/\.[a-zA-Z0-9]+$/);
-  const ext = extMatch ? extMatch[0].toLowerCase() : '.mp4';
+  const ext = extMatch ? extMatch[0].toLowerCase() : ".mp4";
   const inputName = `input_${Date.now()}${ext}`;
   const outputName = `output_${Date.now()}.mp4`;
   let watermarkInputName = null;
 
-  onStatus?.('Cargando video en memoria del navegador...');
-  await ffmpeg.writeFile(inputName, await fetchFile(file));
-
-  // Load watermark image if provided
-  if (extras?.watermark?.file) {
-    const wmExt = extras.watermark.file.name?.match(/\.[a-zA-Z0-9]+$/)?.[0] || '.png';
-    watermarkInputName = `watermark_${Date.now()}${wmExt}`;
-    onStatus?.('Cargando marca de agua...');
-    await ffmpeg.writeFile(watermarkInputName, await fetchFile(extras.watermark.file));
-  }
-
-  // Build FFmpeg command arguments
-  const args = [];
-
-  // Trim: -ss before -i for fast seeking
-  if (extras?.trimStart && extras.trimStart > 0) {
-    args.push('-ss', String(extras.trimStart));
-  }
-
-  args.push('-i', inputName);
-
-  // Trim: -to for end time (relative to -ss if used)
-  if (extras?.trimEnd && extras.trimEnd > 0) {
-    const duration = (extras.trimStart && extras.trimStart > 0)
-      ? extras.trimEnd - extras.trimStart
-      : extras.trimEnd;
-    if (duration > 0) {
-      args.push('-t', String(duration));
-    }
-  }
-
-  // Add watermark as second input
-  if (watermarkInputName) {
-    args.push('-i', watermarkInputName);
-  }
-
-  // Video Codec & Quality
-  args.push('-c:v', 'libx264');
-  args.push('-crf', String(settings.crf));
-  args.push('-preset', settings.presetSpeed || 'veryfast');
-  args.push('-pix_fmt', 'yuv420p');
-
-  // Build video filter chain
-  const vfFilters = [];
-
-  // Resolution Scaling
-  if (settings.width && settings.width > 0) {
-    vfFilters.push(`scale='min(${settings.width},iw)':-2`);
-  }
-
-  // Crop filter
-  if (extras?.cropRect) {
-    const { x, y, w, h } = extras.cropRect;
-    if (x !== 0 || y !== 0 || w !== 100 || h !== 100) {
-      // Convert percentage to pixel expressions
-      const cropW = `iw*${(w / 100).toFixed(4)}`;
-      const cropH = `ih*${(h / 100).toFixed(4)}`;
-      const cropX = `iw*${(x / 100).toFixed(4)}`;
-      const cropY = `ih*${(y / 100).toFixed(4)}`;
-      vfFilters.push(`crop=${cropW}:${cropH}:${cropX}:${cropY}`);
-    }
-  }
-
-  // Apply video filters (without watermark for now)
-  if (watermarkInputName) {
-    // Complex filtergraph for watermark overlay
-    const wm = extras.watermark;
-    // Scale watermark relative to video width, position in %
-    const wmScaleW = `iw*${(wm.scale / 100).toFixed(4)}`;
-    const overlayX = `main_w*${(wm.x / 100).toFixed(4)}`;
-    const overlayY = `main_h*${(wm.y / 100).toFixed(4)}`;
-    const opacity = wm.opacity.toFixed(2);
-
-    let filterComplex = '';
-
-    // Pre-filters on input video
-    if (vfFilters.length > 0) {
-      filterComplex += `[0:v]${vfFilters.join(',')}[base];`;
-    } else {
-      filterComplex += '[0:v]null[base];';
-    }
-
-    // Scale watermark and set opacity
-    filterComplex += `[1:v]scale=${wmScaleW}:-1,format=rgba,colorchannelmixer=aa=${opacity}[wm];`;
-
-    // Overlay
-    filterComplex += `[base][wm]overlay=${overlayX}:${overlayY}[out]`;
-
-    args.push('-filter_complex', filterComplex);
-    args.push('-map', '[out]');
-    args.push('-map', '0:a?');
-  } else if (vfFilters.length > 0) {
-    args.push('-vf', vfFilters.join(','));
-  }
-
-  // Target FPS if specified
-  if (settings.fps && settings.fps > 0) {
-    args.push('-r', String(settings.fps));
-  }
-
-  // Audio Codec & Bitrate
-  if (settings.muteAudio) {
-    args.push('-an');
-  } else {
-    args.push('-c:a', 'aac');
-    args.push('-b:a', settings.audioBitrate || '128k');
-  }
-
-  // Fast start for web streaming
-  args.push('-movflags', '+faststart');
-  args.push(outputName);
-
-  onStatus?.('Procesando video con FFmpeg...');
-  onLog?.(`> ffmpeg ${args.join(' ')}`);
-  await ffmpeg.exec(args);
-
-  onStatus?.('Generando archivo final...');
-  const data = await ffmpeg.readFile(outputName);
-  const compressedBlob = new Blob([data.buffer], { type: 'video/mp4' });
-
-  // Cleanup temporary files in WASM memory
   try {
-    await ffmpeg.deleteFile(inputName);
-    await ffmpeg.deleteFile(outputName);
-    if (watermarkInputName) await ffmpeg.deleteFile(watermarkInputName);
-  } catch (e) {
-    console.warn('Non-critical cleanup warning:', e);
-  }
+    onStatus?.("Cargando video en memoria del navegador...");
+    await ffmpeg.writeFile(inputName, await fetchFile(file));
 
-  return compressedBlob;
+    // Load watermark image if provided
+    if (extras?.watermark?.file) {
+      const wmExt =
+        extras.watermark.file.name?.match(/\.[a-zA-Z0-9]+$/)?.[0] || ".png";
+      watermarkInputName = `watermark_${Date.now()}${wmExt}`;
+      onStatus?.("Cargando marca de agua...");
+      await ffmpeg.writeFile(
+        watermarkInputName,
+        await fetchFile(extras.watermark.file),
+      );
+    }
+
+    // Build FFmpeg command arguments
+    const args = [];
+
+    // Trim: -ss before -i for fast seeking
+    if (extras?.trimStart && extras.trimStart > 0) {
+      args.push("-ss", String(extras.trimStart));
+    }
+
+    args.push("-i", inputName);
+
+    // Trim: -to for end time (relative to -ss if used)
+    if (extras?.trimEnd && extras.trimEnd > 0) {
+      const duration =
+        extras.trimStart && extras.trimStart > 0
+          ? extras.trimEnd - extras.trimStart
+          : extras.trimEnd;
+      if (duration > 0) {
+        args.push("-t", String(duration));
+      }
+    }
+
+    // Add watermark as second input
+    if (watermarkInputName) {
+      args.push("-i", watermarkInputName);
+    }
+
+    // Video Codec & Quality
+    args.push("-c:v", "libx264");
+    args.push("-crf", String(settings.crf));
+    args.push("-preset", settings.presetSpeed || "veryfast");
+    args.push("-pix_fmt", "yuv420p");
+
+    // Build video filter chain
+    const vfFilters = [];
+
+    // Resolution Scaling
+    if (settings.width && settings.width > 0) {
+      vfFilters.push(`scale='min(${settings.width},iw)':-2`);
+    }
+
+    // Crop filter
+    if (extras?.cropRect) {
+      const { x, y, w, h } = extras.cropRect;
+      if (x !== 0 || y !== 0 || w !== 100 || h !== 100) {
+        // Convert percentage to pixel expressions
+        const cropW = `iw*${(w / 100).toFixed(4)}`;
+        const cropH = `ih*${(h / 100).toFixed(4)}`;
+        const cropX = `iw*${(x / 100).toFixed(4)}`;
+        const cropY = `ih*${(y / 100).toFixed(4)}`;
+        vfFilters.push(`crop=${cropW}:${cropH}:${cropX}:${cropY}`);
+      }
+    }
+
+    // Apply video filters (without watermark for now)
+    if (watermarkInputName) {
+      // Complex filtergraph for watermark overlay
+      const wm = extras.watermark;
+      // Scale watermark relative to video width, position in %
+      const wmScaleW = `iw*${(wm.scale / 100).toFixed(4)}`;
+      const overlayX = `main_w*${(wm.x / 100).toFixed(4)}`;
+      const overlayY = `main_h*${(wm.y / 100).toFixed(4)}`;
+      const opacity = wm.opacity.toFixed(2);
+
+      let filterComplex = "";
+
+      // Pre-filters on input video
+      if (vfFilters.length > 0) {
+        filterComplex += `[0:v]${vfFilters.join(",")}[base];`;
+      } else {
+        filterComplex += "[0:v]null[base];";
+      }
+
+      // Scale watermark and set opacity
+      filterComplex += `[1:v]scale=${wmScaleW}:-1,format=rgba,colorchannelmixer=aa=${opacity}[wm];`;
+
+      // Overlay
+      filterComplex += `[base][wm]overlay=${overlayX}:${overlayY}[out]`;
+
+      args.push("-filter_complex", filterComplex);
+      args.push("-map", "[out]");
+      args.push("-map", "0:a?");
+    } else if (vfFilters.length > 0) {
+      args.push("-vf", vfFilters.join(","));
+    }
+
+    // Target FPS if specified
+    if (settings.fps && settings.fps > 0) {
+      args.push("-r", String(settings.fps));
+    }
+
+    // Audio Codec & Bitrate
+    if (settings.muteAudio) {
+      args.push("-an");
+    } else {
+      args.push("-c:a", "aac");
+      args.push("-b:a", settings.audioBitrate || "128k");
+    }
+
+    // Fast start for web streaming
+    args.push("-movflags", "+faststart");
+    args.push(outputName);
+
+    onStatus?.("Procesando video con FFmpeg...");
+    onLog?.(`> ffmpeg ${args.join(" ")}`);
+    await ffmpeg.exec(args);
+
+    onStatus?.("Generando archivo final...");
+    const data = await ffmpeg.readFile(outputName);
+    const compressedBlob = new Blob([data], { type: "video/mp4" });
+
+    return compressedBlob;
+  } finally {
+    // Cleanup temporary files in WASM memory
+    const deleteSafe = async (name) => {
+      try { if (name) await ffmpeg.deleteFile(name); } catch (e) {}
+    };
+    await Promise.all([
+      deleteSafe(inputName),
+      deleteSafe(outputName),
+      deleteSafe(watermarkInputName)
+    ]);
+
+    if (onLog) ffmpeg.off("log", logHandler);
+    if (onProgress) ffmpeg.off("progress", progressHandler);
+  }
 }

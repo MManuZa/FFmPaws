@@ -32,6 +32,18 @@ export default function ResultStats({
     ? originalFile.name.replace(/\.[a-zA-Z0-9]+$/, '') + '-comprimido.mp4'
     : 'video-comprimido.mp4';
 
+  const [localOriginalUrl, setLocalOriginalUrl] = React.useState('');
+
+  useEffect(() => {
+    if (!originalFile) {
+      setLocalOriginalUrl('');
+      return;
+    }
+    const url = URL.createObjectURL(originalFile);
+    setLocalOriginalUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [originalFile]);
+
   return (
     <section className="panel results">
       <div className="section-label">
@@ -58,10 +70,12 @@ export default function ResultStats({
         </div>
       </div>
 
-      <VideoCompareViewer
-        originalUrl={URL.createObjectURL(originalFile)}
-        compressedUrl={compressedUrl}
-      />
+      {localOriginalUrl && (
+        <VideoCompareViewer
+          originalUrl={localOriginalUrl}
+          compressedUrl={compressedUrl}
+        />
+      )}
 
       <div className="download-row">
         <a

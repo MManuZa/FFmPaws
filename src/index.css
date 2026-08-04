@@ -1292,6 +1292,7 @@ footer {
   border: 2px solid var(--emerald);
   box-shadow: 0 0 0 9999px transparent;
   cursor: move;
+  touch-action: none;
 }
 .crop-grid-h, .crop-grid-v {
   position: absolute;
@@ -1680,7 +1681,11 @@ footer {
   .quality-grid { grid-template-columns: 1fr; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .file-name { max-width: 150px; }
+  .file-row { flex-wrap: wrap; justify-content: center; }
   .download-row { flex-direction: column; }
+  .adv-row { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .adv-row select { width: 100%; }
+  .audio-source-group { flex-wrap: wrap; justify-content: center; }
   .workspace-layout { grid-template-columns: 1fr; }
   .sidebar {
     flex-direction: row;

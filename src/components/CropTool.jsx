@@ -106,6 +106,9 @@ export default function CropTool({ file, cropRect, onCropChange }) {
     if (!dragging) return;
 
     const handleMove = (e) => {
+      if (e.type === 'touchmove' && e.cancelable) {
+        e.preventDefault();
+      }
       const { px, py } = getPosPct(e);
       const dx = px - dragStart.x;
       const dy = py - dragStart.y;
@@ -208,13 +211,15 @@ export default function CropTool({ file, cropRect, onCropChange }) {
     const handleUp = () => setDragging(null);
     window.addEventListener('mousemove', handleMove);
     window.addEventListener('mouseup', handleUp);
-    window.addEventListener('touchmove', handleMove);
+    window.addEventListener('touchmove', handleMove, { passive: false });
     window.addEventListener('touchend', handleUp);
+    window.addEventListener('touchcancel', handleUp);
     return () => {
       window.removeEventListener('mousemove', handleMove);
       window.removeEventListener('mouseup', handleUp);
       window.removeEventListener('touchmove', handleMove);
       window.removeEventListener('touchend', handleUp);
+      window.removeEventListener('touchcancel', handleUp);
     };
   }, [dragging, dragStart, getPosPct, onCropChange, aspectRatio, videoDims]);
 
